@@ -1,8 +1,22 @@
 # DeepSeek Companion Chat
 
-[English](README-en.md) | 简体中文
+[在线体验](https://naiancn.github.io/deepseek-companion-chat/) · 简体中文 · [English](README-en.md)
 
 这是一个基于 [DeepSeek 官方 chat-demo](https://github.com/deepseek-ai/chat-demo) 的本地陪伴聊天客户端。浏览器直接连接 DeepSeek API。你可以为每个角色自定义人设、保留多段对话，也可以把 DeepSeek 网页端导出的对话带进来。
+
+## 在线体验
+
+打开在线体验版后，在 **设置 → 数据管理** 输入自己的 DeepSeek API Key。Key 仅保留在当前页面内存中，刷新、关闭页面或点击「清除当前 API Key」后，需要重新输入。聊天请求由浏览器经 HTTPS 直发 DeepSeek。
+
+聊天、角色和记忆仍保存在当前站点的浏览器存储中。同一 `naiancn.github.io` 域名下的不同项目路径共用同源边界。从本地版迁移时，请先导出完整备份，在体验版中恢复，再单独输入 Key。
+
+## 界面截图
+
+![桌面角色聊天与火花](docs/screenshots/desktop-chat.png)
+
+![Token 用量与会话记忆入口](docs/screenshots/context-memory.png)
+
+<img src="docs/screenshots/mobile-chat.png" alt="移动端聊天与输入栏" width="390">
 
 ## 运行
 
@@ -50,7 +64,7 @@ pnpm build
 
 ## 数据与备份
 
-会话、角色、头像、火花和附件原件保存在 IndexedDB，API Key 与偏好保存在浏览器 localStorage。数据库按浏览器用户配置和站点源隔离。换浏览器、主机名或端口后，可用完整备份迁移。发送消息时，人设与当前分支上下文随请求发送给 DeepSeek。
+会话、角色、头像、火花和附件原件保存在 IndexedDB，偏好保存在浏览器 localStorage。本地版也在其中保存 API Key。数据库按浏览器用户配置和站点源隔离。换浏览器、主机名或端口后，可用完整备份迁移。发送消息时，人设与当前分支上下文随请求发送给 DeepSeek。
 
 在 **设置 → 数据管理** 可进行以下操作。
 

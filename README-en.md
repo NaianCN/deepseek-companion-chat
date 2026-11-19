@@ -1,8 +1,22 @@
 # DeepSeek Companion Chat
 
-English | [简体中文](README.zh-CN.md)
+[Live demo](https://naiancn.github.io/deepseek-companion-chat/) · English · [简体中文](README.zh-CN.md)
 
 A local persona chat client based on the [official DeepSeek chat demo](https://github.com/deepseek-ai/chat-demo). The browser connects directly to the DeepSeek API. Create personas, chat with each one across multiple conversations, and follow daily interaction streaks.
+
+## Live demo
+
+Enter your own DeepSeek API key under **Settings → Data**. The page keeps it in memory for the current page only. Enter it again after reloading, closing the page, or selecting **Clear the current API key**. Your browser sends chat requests directly to DeepSeek over HTTPS.
+
+Chats, personas, and memories stay in browser storage for this origin. Project paths on `naiancn.github.io` share the same origin. To move chats from a local installation, export a full backup, restore it in the live demo, and enter your key separately.
+
+## Screenshots
+
+![Desktop persona chat and spark streak](docs/screenshots/desktop-chat.png)
+
+![Token usage and chat memory](docs/screenshots/context-memory.png)
+
+<img src="docs/screenshots/mobile-chat.png" alt="Mobile chat and composer controls" width="390">
 
 ## Getting started
 
@@ -47,7 +61,7 @@ The sidebar shows the DeepSeek account balance and estimated local spending over
 
 ## Data and storage
 
-API keys and settings reside in localStorage. Chats, personas, original attachments, and sparks reside in IndexedDB, scoped to the browser profile and site origin. Persona instructions and conversation context are sent to the configured API when generating replies.
+Settings reside in localStorage. Local installations also store the API key there. Chats, personas, original attachments, and sparks reside in IndexedDB, scoped to the browser profile and site origin. Persona instructions and conversation context are sent to the configured API when generating replies.
 
 - **DeepSeek history import and export.** Import from an extracted v3 export folder, its original ZIP, or a ZIP containing the folder. Import adds chats and skips existing chat IDs. The confirmation can bind new chats to a persona. Export includes the message tree and locally available original images. Other attachments are exported as metadata.
 - **Full Companion backup.** Includes personas, avatars, chat links, interaction events, messages and branches, local originals, persona memories, chat memories, summary versions, and request usage. A confirmed restore replaces this data and clears drafts. Both exports omit the API key and browser settings.
