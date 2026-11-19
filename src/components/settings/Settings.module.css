@@ -213,6 +213,18 @@
   padding-bottom: 4px;
 }
 
+.apiKeyInfo {
+  margin: 0;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+}
+
+.apiKeyActions {
+  display: flex;
+  flex: none;
+  align-items: center;
+}
+
 .apiKeySaved,
 .apiKeyInput {
   display: flex;

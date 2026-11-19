@@ -209,6 +209,8 @@ export const zh = {
   avatarMenuSettingsDialogThemeSelectLightOption: '浅色',
   avatarMenuSettingsDialogThemeSelectDarkOption: '深色',
   avatarMenuSettingsDialogThemeSelectSystemOption: '跟随系统',
+  apiKeyPagesNotice: '请输入自己的 DeepSeek API Key。本页刷新或关闭后需要重新输入。',
+  apiKeyClear: '清除当前 API Key',
   apiKeyStart: '输入 API Key 开始使用',
   apiKeyEdit: '修改 API Key',
   apiKeyPlaceholder: '请输入 API Key',

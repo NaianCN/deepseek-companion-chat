@@ -218,6 +218,9 @@ export const en = {
   avatarMenuSettingsDialogThemeSelectLightOption: 'Light',
   avatarMenuSettingsDialogThemeSelectDarkOption: 'Dark',
   avatarMenuSettingsDialogThemeSelectSystemOption: 'System',
+  apiKeyPagesNotice:
+    'Use your own DeepSeek API key. Enter it again after refreshing or closing this page.',
+  apiKeyClear: 'Clear the current API key',
   apiKeyStart: 'Enter an API Key to get started',
   apiKeyEdit: 'Edit API Key',
   apiKeyPlaceholder: 'Enter API Key',

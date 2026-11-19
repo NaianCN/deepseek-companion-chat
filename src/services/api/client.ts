@@ -69,7 +69,12 @@ const readErrorResponse = async (
 export const request = async (url: string, init: RequestInit): Promise<Response> => {
   let response: Response
   try {
-    response = await fetch(url, init)
+    response = await fetch(
+      url,
+      typeof __COMPANION_PAGES__ !== 'undefined' && __COMPANION_PAGES__
+        ? { ...init, redirect: 'error' }
+        : init
+    )
   } catch (error) {
     if (init.signal?.aborted) {
       throw error

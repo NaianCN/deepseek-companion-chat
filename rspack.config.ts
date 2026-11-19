@@ -5,6 +5,16 @@ import { defineConfig } from '@rspack/cli'
 import { rspack, type Configuration } from '@rspack/core'
 
 const dev = process.env.NODE_ENV !== 'production'
+const pagesDemo = !dev && process.env.COMPANION_PAGES === '1'
+const deepSeekOrigin = 'https://api.deepseek.com'
+const pagesCsp = [
+  "script-src 'self'",
+  `connect-src 'self' ${deepSeekOrigin}`,
+  "img-src 'self' blob: data:",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'none'",
+].join('; ')
 const targets = ['chrome >= 105', 'edge >= 105', 'safari >= 16', 'firefox >= 110']
 const root = path.dirname(fileURLToPath(import.meta.url))
 const { version } = JSON.parse(
@@ -25,7 +35,7 @@ type ConfigOptions = {
 
 /** 创建构建配置，支持自定义 API 地址和开发服务器选项 */
 export const createConfig = ({
-  apiOrigin = 'https://api.deepseek.com',
+  apiOrigin = deepSeekOrigin,
   devServer,
 }: ConfigOptions = {}): Configuration => ({
   mode: dev ? 'development' : 'production',
@@ -78,9 +88,17 @@ export const createConfig = ({
     new rspack.HtmlRspackPlugin({
       template: './src/index.html',
       scriptLoading: 'defer',
-      meta: { 'application-version': version },
+      meta: {
+        'application-version': version,
+        ...(pagesDemo && {
+          'Content-Security-Policy': { 'http-equiv': 'Content-Security-Policy', content: pagesCsp },
+        }),
+      },
     }),
-    new rspack.DefinePlugin({ __API_ORIGIN__: JSON.stringify(apiOrigin) }),
+    new rspack.DefinePlugin({
+      __API_ORIGIN__: JSON.stringify(pagesDemo ? deepSeekOrigin : apiOrigin),
+      __COMPANION_PAGES__: JSON.stringify(pagesDemo),
+    }),
     new rspack.CopyRspackPlugin({
       patterns: [
         { from: path.resolve(root, 'LICENSE'), to: 'LICENSE', toType: 'file' },

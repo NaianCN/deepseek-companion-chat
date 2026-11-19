@@ -2,6 +2,8 @@ import { create } from 'zustand'
 import type { TtsVoice } from './api/speech.js'
 import { normalizeLocation, type UserLocation } from './location.js'
 
+export const isPagesDemo = typeof __COMPANION_PAGES__ !== 'undefined' && __COMPANION_PAGES__
+
 export type Locale = 'zh-CN' | 'en-US'
 
 /** 主题偏好；默认跟随系统 */
@@ -97,7 +99,7 @@ export const validBudget = (value: number, fallback: number, max: number) =>
   Number.isSafeInteger(value) && value >= 256 && value <= max ? value : fallback
 
 export const useSettings = create<Settings>(() => ({
-  apiKey: read(KEYS.apiKey),
+  apiKey: isPagesDemo ? null : read(KEYS.apiKey),
   locale: initialLocale(),
   location: initialLocation(),
   themePreference: initialThemePreference(),
@@ -132,7 +134,9 @@ export const setTtsVoice = (ttsVoice: TtsVoice) => {
 }
 
 export const setApiKey = (apiKey: string | null) => {
-  write(KEYS.apiKey, apiKey)
+  if (!isPagesDemo) {
+    write(KEYS.apiKey, apiKey)
+  }
   useSettings.setState({ apiKey })
 }
 

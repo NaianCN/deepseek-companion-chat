@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { IconEditOutline16 } from '../base/icons.js'
-import { useSettings } from '../../services/settings.js'
+import { IconEditOutline16, IconTrashOutline16 } from '../base/icons.js'
+import { isPagesDemo, setApiKey, useSettings } from '../../services/settings.js'
 import { useIsMobile } from '../../app/viewport.js'
 import { IconButton } from '../base/IconButton.js'
 import { useApiKeyForm } from './useApiKeyForm.js'
@@ -27,15 +27,26 @@ export const ApiKeyField = ({ editor }: { editor: ApiKeyEditor }) => {
     <div className={styles.cell}>
       <div className={styles.apiKey}>
         <div className={styles.label}>{t('apiKeyStart')}</div>
+        {isPagesDemo && <p className={styles.apiKeyInfo}>{t('apiKeyPagesNotice')}</p>}
         {apiKey && !editing ? (
           <div className={styles.apiKeySaved}>
             <span className={styles.apiKeyMask}>{'*'.repeat(apiKey.length)}</span>
-            <IconButton
-              tone="primary"
-              icon={<IconEditOutline16 />}
-              tooltip={t('apiKeyEdit')}
-              onClick={() => setEditing(true)}
-            />
+            <div className={styles.apiKeyActions}>
+              <IconButton
+                tone="primary"
+                icon={<IconEditOutline16 />}
+                tooltip={t('apiKeyEdit')}
+                onClick={() => setEditing(true)}
+              />
+              {isPagesDemo && (
+                <IconButton
+                  tone="primary"
+                  icon={<IconTrashOutline16 />}
+                  tooltip={t('apiKeyClear')}
+                  onClick={() => setApiKey(null)}
+                />
+              )}
+            </div>
           </div>
         ) : (
           <div className={styles.apiKeyInput}>
