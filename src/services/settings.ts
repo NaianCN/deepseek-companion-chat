@@ -16,6 +16,9 @@ type Settings = {
   ttsVoice: TtsVoice
   thinking: boolean
   search: boolean
+  inputBudget: number
+  outputBudget: number
+  budgetAction: 'pause' | 'warn'
   siderCollapsed: boolean
 }
 
@@ -28,6 +31,9 @@ const KEYS = {
   thinking: 'chat-demo:thinking',
   search: 'chat-demo:search',
   siderCollapsed: 'chat-demo:sider-collapsed',
+  inputBudget: 'chat-demo:input-budget',
+  outputBudget: 'chat-demo:output-budget',
+  budgetAction: 'chat-demo:budget-action',
 } as const
 
 const read = (key: string) => {
@@ -59,7 +65,7 @@ const initialLocale = (): Locale => {
   if (saved === 'zh-CN' || saved === 'en-US') {
     return saved
   }
-  return isChineseBrowser() ? 'zh-CN' : 'en-US'
+  return 'zh-CN'
 }
 
 const initialLocation = (): UserLocation | null => {
@@ -87,6 +93,9 @@ const initialThemePreference = (): ThemePreference => {
 /** 未保存过时使用服务端默认音色 stella（海星） */
 const initialTtsVoice = (): TtsVoice => (read(KEYS.ttsVoice) === 'tide' ? 'tide' : 'stella')
 
+export const validBudget = (value: number, fallback: number, max: number) =>
+  Number.isSafeInteger(value) && value >= 256 && value <= max ? value : fallback
+
 export const useSettings = create<Settings>(() => ({
   apiKey: read(KEYS.apiKey),
   locale: initialLocale(),
@@ -95,6 +104,9 @@ export const useSettings = create<Settings>(() => ({
   ttsVoice: initialTtsVoice(),
   thinking: read(KEYS.thinking) === 'true',
   search: read(KEYS.search) === 'true',
+  inputBudget: validBudget(Number(read(KEYS.inputBudget)), 8000, 512000),
+  outputBudget: validBudget(Number(read(KEYS.outputBudget)), 8192, 128000),
+  budgetAction: read(KEYS.budgetAction) === 'warn' ? 'warn' : 'pause',
   siderCollapsed: read(KEYS.siderCollapsed) === 'true',
 }))
 
@@ -137,4 +149,18 @@ export const setSearch = (search: boolean) => {
 export const setSiderCollapsed = (siderCollapsed: boolean) => {
   write(KEYS.siderCollapsed, String(siderCollapsed))
   useSettings.setState({ siderCollapsed })
+}
+
+export const setContextBudgets = (
+  inputBudget: number,
+  outputBudget: number,
+  budgetAction: Settings['budgetAction']
+) => {
+  const current = useSettings.getState()
+  const input = validBudget(inputBudget, current.inputBudget, 512000)
+  const output = validBudget(outputBudget, current.outputBudget, 128000)
+  write(KEYS.inputBudget, String(input))
+  write(KEYS.outputBudget, String(output))
+  write(KEYS.budgetAction, budgetAction)
+  useSettings.setState({ inputBudget: input, outputBudget: output, budgetAction })
 }

@@ -1,7 +1,20 @@
+import {
+  buildRequest,
+  DEFAULT_CHAT_MODEL as MODEL,
+  historyForRequest,
+} from '../../features/context/assemble.js'
+import { estimateRequest, loadTokenizer } from '../../features/context/estimate.js'
+import { readSessionContext, refreshContextData } from '../../features/context/repository.js'
+import { trackRequest } from '../../features/context/usageCollector.js'
+import { openContextEditor } from '../../features/context/editorState.js'
+import { showToast } from '../../components/base/toastState.js'
+import type { Interaction, Persona } from '../../features/persona/types.js'
+import { qualifyingInteraction } from '../../features/streak/streak.js'
+import { bindPersona, personaForSession } from '../../features/persona/repository.js'
+import { refreshPersonas } from '../../features/persona/store.js'
 import { create } from 'zustand'
 import { createId } from '../../utils/id.js'
 import { ApiError, streamMessage } from '../api/client.js'
-import type { ChatModel, CreateMessageRequest } from '../api/types.js'
 import { extractFileIds, getFileErrorCode, isRetryableApiError } from '../api/errors.js'
 import { cancelUpload, describeUploadError, uploadAttachment, useUploads } from '../attachments.js'
 import { useSettings } from '../settings.js'
@@ -15,13 +28,7 @@ import {
   prepareDraftMessage,
 } from './drafts.js'
 import { createLatestReminder } from './latestReminder.js'
-import {
-  applyEvent,
-  canContinueReply,
-  getContextRounds,
-  settleReply,
-  toRequestMessages,
-} from './reply.js'
+import { applyEvent, canContinueReply, getContextRounds, settleReply } from './reply.js'
 import {
   toSessionSummary,
   type AssistantMessage,
@@ -32,29 +39,12 @@ import {
   type UserMessage,
 } from './types.js'
 
-/** deepseek-flash 同时支持深度思考与图片输入 */
-const MODEL: ChatModel = 'deepseek-flash'
-/** 所有生成请求统一携带的助手身份说明 */
-const SYSTEM_PROMPT = '该助手为DeepSeek，由深度求索公司创造。'
 /** 保留最近打开的详情；当前会话、生成中及尚未成功保存的会话不淘汰。 */
 const SESSION_CACHE_LIMIT = 5
-/** 安全审核固定开启，所有请求都走扩展模式 */
-const SAFETY_CHECK = { level: 'high' } as const
 /** 服务端判定 file_id 失效后，重新补传并重发的最多次数（不含首次请求） */
 const FILE_RETRY_LIMIT = 2
 /** 退避基数，第 n 次重试等待 2^n 倍；连续失败达到上限就放弃，把原始报错展示出来 */
 const FILE_RETRY_BASE_DELAY = 1000
-
-/** 阅读链接始终开启，智能搜索开关控制是否另行声明搜索工具（含边想边搜）。 */
-const serverTools = (search: boolean): CreateMessageRequest['tools'] => {
-  const tools: CreateMessageRequest['tools'] = [
-    { type: 'deepseek_read_url', name: 'deepseek_read_url' },
-  ]
-  if (search) {
-    tools.push({ type: 'deepseek_web_search', name: 'deepseek_web_search' })
-  }
-  return tools
-}
 
 /** 允许自动补标题的请求；手动重命名后取消本轮标题写入，包含主动清空标题的情况。 */
 const titleRequests = new Set<AbortController>()
@@ -109,6 +99,7 @@ const sessionAccess = new Map<string, number>()
 const unsavedSessions = new Set<string>()
 /** 保存失败时保留原件，重试成功后才释放。 */
 const pendingFiles = new Map<string, db.StoredFile[]>()
+const pendingInteractions = new Map<string, Interaction[]>()
 const deletingSessions = new Set<string>()
 const deletionTasks = new Set<Promise<boolean>>()
 const streamFlushes = new Map<string, () => void>()
@@ -188,14 +179,21 @@ const persist = (sessionId: string) => {
     }
     const epoch = historyEpoch
     const files = pendingFiles.get(sessionId)
+    const interactions = pendingInteractions.get(sessionId)
     void db
-      .saveSession(session, files)
+      .saveSession(session, files, interactions)
       .then(() => {
         if (epoch !== historyEpoch || !getSession(sessionId)) {
           return
         }
         if (pendingFiles.get(sessionId) === files) {
           pendingFiles.delete(sessionId)
+        }
+        if (interactions) {
+          if (pendingInteractions.get(sessionId) === interactions) {
+            pendingInteractions.delete(sessionId)
+          }
+          void refreshPersonas().catch(db.reportStorageError('refresh sparks'))
         }
         if (getSession(sessionId) === session) {
           unsavedSessions.delete(sessionId)
@@ -385,11 +383,29 @@ const waitForIdle = (sessionId?: string) =>
     })
   })
 
+export const mergeHistory = async (personaId: string | null) => {
+  if (get().importingHistory || !get().ready) {
+    throw new Error('History is unavailable')
+  }
+  set({ importingHistory: true })
+  try {
+    await Promise.all(deletionTasks)
+    const { added, skipped } = await db.commitStagingMerge(
+      personaId,
+      get().sessions.map((session) => session.id)
+    )
+    set((state) => ({ sessions: sortSessions([...state.sessions, ...added]) }))
+    void refreshPersonas().catch(db.reportStorageError('refresh imported persona links'))
+    return { added: added.length, skipped }
+  } finally {
+    set({ importingHistory: false })
+  }
+}
+
 /**
- * 替换历史对话：先写入暂存，成功后原子替换旧记录；写入为空即删除全部会话与附件。
- * 期间停止生成并禁止修改会话；失败时清除暂存，保留原有记录。
+ * 原子替换历史对话。期间停止生成并禁止修改会话；提交成功后重置会话缓存。
  */
-export const replaceHistory = async (write: () => Promise<void>): Promise<number> => {
+export const replaceHistory = async (commit: () => Promise<SessionSummary[]>): Promise<number> => {
   if (get().importingHistory) {
     throw new Error('History replacement is already in progress')
   }
@@ -404,18 +420,12 @@ export const replaceHistory = async (write: () => Promise<void>): Promise<number
     initTask = undefined
     sessionLoads.clear()
     await waitForIdle()
-    await db.clearStaging()
-    let summaries: SessionSummary[]
-    try {
-      await write()
-      summaries = await db.commitStaging()
-    } catch (error) {
-      await db.clearStaging().catch(db.reportStorageError('clear unfinished history replacement'))
-      throw error
-    }
+    const summaries = await commit()
+    void refreshContextData().catch(db.reportStorageError('refresh restored context data'))
     sessionAccess.clear()
     unsavedSessions.clear()
     pendingFiles.clear()
+    pendingInteractions.clear()
     clearAllDrafts()
     set({
       ready: true,
@@ -426,6 +436,7 @@ export const replaceHistory = async (write: () => Promise<void>): Promise<number
       sessionSaveErrors: {},
       activeId: null,
     })
+    void refreshPersonas().catch(db.reportStorageError('refresh persona links'))
     return summaries.length
   } finally {
     set({ importingHistory: false })
@@ -438,6 +449,49 @@ export const replaceHistory = async (write: () => Promise<void>): Promise<number
       void initChat()
     }
   }
+}
+
+export const openPersonaSession = async (personaId: string, createNew = false) => {
+  if (get().importingHistory || !get().ready) {
+    throw new Error('Chat is unavailable')
+  }
+  if (!createNew) {
+    const links = await db
+      .getDB()
+      .then((database) => database.getAllFromIndex('personaLinks', 'personaId', personaId))
+    const linked = new Set(links.map((link) => link.sessionId))
+    const primary = get()
+      .sessions.filter((session) => linked.has(session.id))
+      .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))[0]
+    if (primary) {
+      selectSession(primary.id)
+      return
+    }
+  }
+  const now = Date.now()
+  const session: Session = {
+    id: createId(),
+    title: '',
+    createdAt: now,
+    updatedAt: now,
+    messages: [],
+    rootMessageId: null,
+  }
+  if (get().importingHistory) {
+    throw new Error('Chat is unavailable')
+  }
+  await bindPersona(session.id, personaId, session)
+  if (get().importingHistory) {
+    return
+  }
+  touchSession(session.id)
+  set((state) => ({
+    sessions: [toSessionSummary(session), ...state.sessions],
+    sessionCache: { ...state.sessionCache, [session.id]: session },
+    activeId: session.id,
+  }))
+  trimSessionCache()
+  await refreshPersonas()
 }
 
 export const newChat = () => {
@@ -501,6 +555,8 @@ const removeSessionData = async (id: string): Promise<boolean> => {
       return false
     }
     await db.deleteSession(id)
+    void refreshContextData().catch(db.reportStorageError('refresh context data'))
+    void refreshPersonas().catch(db.reportStorageError('refresh persona links'))
     if (epoch !== historyEpoch) {
       return true
     }
@@ -508,6 +564,7 @@ const removeSessionData = async (id: string): Promise<boolean> => {
     sessionAccess.delete(id)
     unsavedSessions.delete(id)
     pendingFiles.delete(id)
+    pendingInteractions.delete(id)
     clearDraft(id)
     set((state) => ({
       sessions: state.sessions.filter((session) => session.id !== id),
@@ -543,9 +600,12 @@ export const stopReply = (sessionId: string) => getStreamController(sessionId)?.
 
 /**
  * 提交指定会话的最新草稿；null 表示新建会话。
- * 同步接收成功才清空草稿，附件原件由会话接管；保存失败仍通过保存入口重试。
+ * 新角色会话先写入会话与绑定；成功后接管草稿中的附件。
  */
-export const sendMessage = (targetSessionId: string | null) => {
+export const sendMessage = async (
+  targetSessionId: string | null,
+  newPersonaId: string | null = null
+) => {
   if (get().importingHistory || !get().ready) {
     return false
   }
@@ -562,28 +622,6 @@ export const sendMessage = (targetSessionId: string | null) => {
   ) {
     return false
   }
-  if (sessionId === null) {
-    const session: Session = {
-      id: createId(),
-      title: '',
-      createdAt: now,
-      updatedAt: now,
-      messages: [],
-      rootMessageId: null,
-    }
-    sessionId = session.id
-    touchSession(session.id)
-    set((state) => ({
-      sessions: [toSessionSummary(session), ...state.sessions],
-      sessionCache: { ...state.sessionCache, [session.id]: session },
-      activeId: session.id,
-    }))
-  }
-  const current = getSession(sessionId)
-  if (!current) {
-    return false
-  }
-  const history = getVisibleMessages(current)
   const question: UserMessage = {
     id: createId(),
     role: 'user',
@@ -598,6 +636,70 @@ export const sendMessage = (targetSessionId: string | null) => {
     })),
     createdAt: now,
   }
+  const current = sessionId !== null ? getSession(sessionId) : undefined
+  const history = current ? getVisibleMessages(current) : []
+  const settings = useSettings.getState()
+  const epoch = historyEpoch
+  const [persona, context] = await Promise.all([
+    sessionId !== null
+      ? personaForSession(sessionId)
+      : newPersonaId
+        ? db.getDB().then((database) => database.get('personas', newPersonaId))
+        : undefined,
+    sessionId !== null ? readSessionContext(sessionId) : undefined,
+    loadTokenizer(),
+  ])
+  if (
+    epoch !== historyEpoch ||
+    get().importingHistory ||
+    (sessionId !== null && (current !== getSession(sessionId) || getStreamController(sessionId)))
+  ) {
+    return false
+  }
+  const estimate = estimateRequest(
+    buildRequest({
+      persona,
+      context,
+      history,
+      question,
+      thinking: settings.thinking,
+      search: settings.search,
+      latestReminder: createLatestReminder(settings),
+      maxTokens: settings.outputBudget,
+    })
+  )
+  if (estimate.input >= settings.inputBudget && settings.budgetAction === 'pause') {
+    showToast({ key: 'contextBudgetBlocked', type: 'error' })
+    if (sessionId !== null) {
+      openContextEditor(sessionId)
+    }
+    return false
+  }
+  if (sessionId === null) {
+    const session: Session = {
+      id: createId(),
+      title: '',
+      createdAt: now,
+      updatedAt: now,
+      messages: [],
+      rootMessageId: null,
+    }
+    if (newPersonaId) {
+      const epoch = historyEpoch
+      await bindPersona(session.id, newPersonaId, session)
+      if (epoch !== historyEpoch || get().importingHistory) {
+        return false
+      }
+      void refreshPersonas().catch(db.reportStorageError('refresh new persona chat'))
+    }
+    sessionId = session.id
+    touchSession(session.id)
+    set((state) => ({
+      sessions: [toSessionSummary(session), ...state.sessions],
+      sessionCache: { ...state.sessionCache, [session.id]: session },
+      activeId: session.id,
+    }))
+  }
   const reply = createReply()
   updateSession(sessionId, (session) => ({
     ...appendBranch(session, history.at(-1)?.id ?? null, [question, reply]),
@@ -611,7 +713,7 @@ export const sendMessage = (targetSessionId: string | null) => {
   }
   persist(sessionId)
   clearSentDraft(targetSessionId)
-  void streamReply(sessionId, reply, { history, question })
+  void streamReply(sessionId, reply, { history, question }, true)
   return true
 }
 
@@ -813,7 +915,12 @@ const refreshRequest = (sessionId: string, request: Request): Request => {
  * - 历史轮次（仅进入上下文的）中没有 serverId 的附件，多为导入的图片：从最新的消息往前逐张补传，
  *   失败静默跳过，该附件不进入本次请求，下次发送时再试。
  */
-const prepareFiles = async (sessionId: string, request: Request, signal: AbortSignal) => {
+const prepareFiles = async (
+  sessionId: string,
+  request: Request,
+  signal: AbortSignal,
+  retainedHistory = request.history
+) => {
   const epoch = historyEpoch
   // 服务端判定 file_id 失效时会清掉会话里的 serverId，先用最新消息替换请求快照，
   // 否则快照里仍是旧 id，补传会直接复用它。
@@ -844,7 +951,7 @@ const prepareFiles = async (sessionId: string, request: Request, signal: AbortSi
   }
 
   const pending = new Map<string, FileAttachment>()
-  for (const [user] of getContextRounds(request.history).toReversed()) {
+  for (const [user] of getContextRounds(retainedHistory).toReversed()) {
     for (const file of user.files) {
       if (!file.serverId && !serverIds.has(file.id) && !pending.has(file.id)) {
         pending.set(file.id, file)
@@ -959,13 +1066,20 @@ const waitForRetry = (attempt: number, signal: AbortSignal) =>
  * 补传失败时回复记为 upload 错误，可重试。
  * 服务端判定 file_id 失效时重新补传后重发，退避重试且次数有上限，超过则按原始报错收尾。
  */
-const streamReply = async (sessionId: string, initial: AssistantMessage, request: Request) => {
+const streamReply = async (
+  sessionId: string,
+  initial: AssistantMessage,
+  request: Request,
+  isNewTurn = false
+) => {
   const controller = new AbortController()
   if (!getSession(sessionId)?.title) {
     titleRequests.add(controller)
   }
   set((state) => ({ streaming: { ...state.streaming, [sessionId]: controller } }))
   let reply = initial
+  let persona: Persona | undefined
+  let completedAt: number | undefined
   let frame = 0
   const flush = () => {
     cancelAnimationFrame(frame)
@@ -975,12 +1089,21 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
   streamFlushes.set(sessionId, flush)
 
   try {
+    const [activePersona, context] = await Promise.all([
+      personaForSession(sessionId),
+      readSessionContext(sessionId),
+      loadTokenizer(),
+    ])
+    persona = activePersona
+    const settings = useSettings.getState()
+    const retainedHistory = historyForRequest(context, request.history)
     for (let attempt = 0; ; attempt += 1) {
       /** 附件补齐前出错属于上传失败，请求还没有发出 */
       let preparing = true
       let receivedContent = false
+      let tracked: ReturnType<typeof trackRequest> | undefined
       try {
-        const prepared = await prepareFiles(sessionId, request, controller.signal)
+        const prepared = await prepareFiles(sessionId, request, controller.signal, retainedHistory)
         preparing = false
         // 附件就绪后获取本轮信息；续写沿用原回答快照，重新生成的快照独立保存。
         const latestReminder = prepared.prefix
@@ -989,28 +1112,37 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
         reply = { ...reply, latestReminder }
         updateReply(sessionId, reply)
         persist(sessionId)
-        const messages = toRequestMessages(
-          prepared.history,
-          prepared.question,
-          prepared.prefix,
-          initial.thinking ?? false,
-          latestReminder
-        )
-        const events = streamMessage(
-          useSettings.getState().apiKey ?? '',
-          {
-            model: initial.model ?? MODEL,
-            system: SYSTEM_PROMPT,
-            messages,
-            thinking: { type: initial.thinking ? 'enabled' : 'disabled' },
-            safety_check: SAFETY_CHECK,
-            tools: serverTools(initial.search ?? false),
-            ...(titleRequests.has(controller) ? { title: { enabled: true } } : {}),
-          },
-          controller.signal
-        )
+        const body = buildRequest({
+          ...prepared,
+          persona,
+          context,
+          model: initial.model ?? MODEL,
+          thinking: initial.thinking,
+          search: initial.search,
+          latestReminder,
+          maxTokens: settings.outputBudget,
+          title: titleRequests.has(controller),
+        })
+        const { input } = estimateRequest(body)
+        if (input >= settings.inputBudget) {
+          if (settings.budgetAction === 'pause') {
+            reply = settleReply(reply, 'error', Date.now(), {
+              kind: 'protocol',
+              message: '',
+              localMessage: { key: 'contextBudgetBlocked' },
+            })
+            if (get().activeId === sessionId) {
+              openContextEditor(sessionId)
+            }
+            break
+          }
+          showToast({ key: 'contextNearBudget' })
+        }
+        tracked = trackRequest(sessionId, body.model, 'chat', initial.id)
+        const events = streamMessage(settings.apiKey ?? '', body, controller.signal)
         const blockIndexes = new Map<number, number>()
         for await (const event of events) {
+          tracked.consume(event)
           receivedContent ||= event.type === 'content_block_start'
           if (
             event.type === 'message_delta' &&
@@ -1031,7 +1163,12 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
             frame ||= requestAnimationFrame(flush)
           }
         }
-        reply = settleReply(reply, 'done', Date.now())
+        if (controller.signal.aborted) {
+          reply = settleReply(reply, 'stopped', Date.now())
+        } else {
+          completedAt = Date.now()
+          reply = settleReply(reply, 'done', completedAt)
+        }
         break
       } catch (error) {
         if (controller.signal.aborted) {
@@ -1051,7 +1188,7 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
         if (
           attempt < FILE_RETRY_LIMIT &&
           !receivedContent &&
-          reuploadInvalidatedFiles(sessionId, request, error)
+          reuploadInvalidatedFiles(sessionId, { ...request, history: retainedHistory }, error)
         ) {
           await waitForRetry(attempt, controller.signal)
           if (controller.signal.aborted) {
@@ -1077,13 +1214,31 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           })
         }
         break
+      } finally {
+        await tracked?.finish().catch(db.reportStorageError('record final usage'))
       }
     }
+  } catch (error) {
+    db.reportStorageError('load conversation persona')(error)
+    reply = settleReply(reply, 'error', Date.now(), {
+      kind: 'protocol',
+      message: '',
+      localMessage: { key: 'personaStorageError' },
+    })
   } finally {
     titleRequests.delete(controller)
     streamFlushes.delete(sessionId)
     cancelAnimationFrame(frame)
     updateReply(sessionId, reply)
+    if (isNewTurn && persona && completedAt !== undefined && !controller.signal.aborted) {
+      const interaction = qualifyingInteraction(reply, sessionId, persona.id, completedAt)
+      if (interaction) {
+        pendingInteractions.set(sessionId, [
+          ...(pendingInteractions.get(sessionId) ?? []),
+          interaction,
+        ])
+      }
+    }
     set((state) => ({
       streaming: Object.fromEntries(
         Object.entries(state.streaming).filter(([id]) => id !== sessionId)

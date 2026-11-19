@@ -63,7 +63,10 @@ const decodePath = (bytes: Uint8Array, flags: number) => {
   if (!(flags & 0x800) && bytes.some((byte) => byte > 0x7f)) {
     invalid()
   }
-  const path = new TextDecoder('utf-8', { fatal: true }).decode(bytes).normalize('NFC')
+  const path = new TextDecoder('utf-8', { fatal: true })
+    .decode(bytes)
+    .normalize('NFC')
+    .replace(/^\.\//, '')
   if (!path || path.includes('\\') || path.includes('\0') || /^[A-Za-z]:/.test(path)) {
     invalid()
   }
@@ -238,10 +241,22 @@ export type ArchiveEntry = {
  * 按条目在文件中的物理顺序逐条、逐块解压，跳过目录条目。
  * 调用方必须消费完当前条目的数据，再请求下一个条目。
  */
-export async function* readArchive(file: File): AsyncGenerator<ArchiveEntry> {
+export async function* readArchive(
+  file: File,
+  order?: (paths: string[]) => (path: string) => number
+): AsyncGenerator<ArchiveEntry> {
   const directory = await readDirectory(file)
-  for (const [index, entry] of directory.entries.entries()) {
-    const boundary = directory.entries[index + 1]?.offset ?? directory.offset
+  const files = directory.entries.map((entry, index) => ({
+    entry,
+    boundary: directory.entries[index + 1]?.offset ?? directory.offset,
+  }))
+  if (order) {
+    const priority = order(
+      files.filter(({ entry }) => !entry.path.endsWith('/')).map(({ entry }) => entry.path)
+    )
+    files.sort((a, b) => priority(a.entry.path) - priority(b.entry.path))
+  }
+  for (const { entry, boundary } of files) {
     const start = await readEntryOffset(file, entry, boundary)
     if (entry.path.endsWith('/')) {
       continue

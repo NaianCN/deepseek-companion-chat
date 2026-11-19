@@ -25,8 +25,10 @@ export type LocalSession = {
 
 const time = (value: string) => Date.parse(value)
 
-const toFile = (file: FileEntry): FileAttachment => ({
-  id: file.id,
+type AttachmentId = (file: FileEntry) => string
+
+const toFile = (file: FileEntry, attachmentId: AttachmentId): FileAttachment => ({
+  id: attachmentId(file),
   serverId: null,
   name: file.file_name,
   size: file.file_size,
@@ -35,12 +37,14 @@ const toFile = (file: FileEntry): FileAttachment => ({
   mimeType: '',
 })
 
-const toUser = (message: ChatMessage): UserMessage => ({
+const toUser = (message: ChatMessage, attachmentId: AttachmentId): UserMessage => ({
   id: String(message.id),
   role: 'user',
   createdAt: time(message.inserted_at),
   content: message.fragments.map((item) => (item.type === 'REQUEST' ? item.content : '')).join(''),
-  files: message.fragments.flatMap((item) => (item.type === 'FILE' ? item.files.map(toFile) : [])),
+  files: message.fragments.flatMap((item) =>
+    item.type === 'FILE' ? item.files.map((file) => toFile(file, attachmentId)) : []
+  ),
 })
 
 /** 归档不带原调用 ID，以消息和片段位置生成稳定 ID，调用与结果共用。 */
@@ -235,7 +239,10 @@ const toAssistant = (message: ChatMessage): AssistantMessage => {
  * 按 id 排序还原消息树：父消息的 id 必须更小、角色交替、根为提问。
  * current_message_id 到根的路径为当前分支；其余节点默认选中 id 最大的子消息。
  */
-const buildTree = (file: SessionFile): Pick<Session, 'messages' | 'rootMessageId'> => {
+const buildTree = (
+  file: SessionFile,
+  attachmentId: AttachmentId
+): Pick<Session, 'messages' | 'rootMessageId'> => {
   const sorted = file.messages.toSorted((a, b) => a.id - b.id)
   const byId = new Map<number, Message>()
   const messages = sorted.map((message) => {
@@ -248,7 +255,7 @@ const buildTree = (file: SessionFile): Pick<Session, 'messages' | 'rootMessageId
     ) {
       fail('backupInvalidBranches')
     }
-    const local = message.role === 'USER' ? toUser(message) : toAssistant(message)
+    const local = message.role === 'USER' ? toUser(message, attachmentId) : toAssistant(message)
     local.parentId = parent ? parent.id : null
     if (parent) {
       parent.selectedChildId = local.id
@@ -271,16 +278,20 @@ const buildTree = (file: SessionFile): Pick<Session, 'messages' | 'rootMessageId
 }
 
 /** 转换单个会话，并列出本会话目录下需要从 ZIP 读取的图片。 */
-export const toLocalSession = (file: SessionFile): LocalSession => {
+export const toLocalSession = (
+  file: SessionFile,
+  attachmentId: AttachmentId = (entry) => entry.id
+): LocalSession => {
   const session: Session = {
     id: file.id,
     // 空标题按「新对话」显示，导出时还原为 null。
     title: file.title ?? '',
     createdAt: time(file.inserted_at),
     updatedAt: time(file.updated_at),
-    ...buildTree(file),
+    ...buildTree(file, attachmentId),
   }
   const images = new Map<string, string>()
+  const sourceIds = new Map<string, string>()
   for (const message of file.messages) {
     for (const item of message.fragments) {
       if (item.type !== 'FILE') {
@@ -296,13 +307,15 @@ export const toLocalSession = (file: SessionFile): LocalSession => {
           continue
         }
         // 图片只能在本会话目录下，同一条目不能对应不同文件。
+        const id = attachmentId(entry)
         if (
           !path.startsWith(sessionFilesDir(file.id)) ||
-          (images.get(path) ?? entry.id) !== entry.id
+          (sourceIds.get(path) ?? entry.id) !== entry.id
         ) {
           fail('backupInvalidFiles')
         }
-        images.set(path, entry.id)
+        sourceIds.set(path, entry.id)
+        images.set(path, id)
       }
     }
   }

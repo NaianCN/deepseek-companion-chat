@@ -16,7 +16,7 @@ export const ReadAloudButton = ({ messageId, text }: { messageId: string; text: 
   return (
     <IconButton
       icon={status === 'idle' ? <IconPlayMediaOutline16 /> : <ReadingBars mode={status} />}
-      tooltip={status === 'idle' ? t('ttsPlay') : t('ttsStop')}
+      tooltip={status === 'idle' ? `${t('ttsPlay')} · ${t('contextExtraCost')}` : t('ttsStop')}
       tooltipPlacement="bottom"
       onClick={() =>
         toggleReadAloud(messageId, text, (error) => showToast(describeReadAloudError(error)))

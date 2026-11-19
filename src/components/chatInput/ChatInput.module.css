@@ -1,4 +1,6 @@
 .wrapper {
+  container-type: inline-size;
+  --control-size: 34px;
   --line-height: 24px;
   --input-padding-top: 12px;
   display: flex;
@@ -221,6 +223,7 @@
 
 @media not all and (min-width: 768px) {
   .wrapper {
+    --control-size: 44px;
     flex-shrink: 0;
     max-height: calc(var(--app-viewport-height, 100dvh) - 120px);
   }
@@ -240,15 +243,16 @@
   align-items: center;
   gap: 8px;
   margin-top: 4px;
-  padding: 12px;
+  cursor: default;
+  padding: 8px 10px 10px;
 }
 
 .toggles {
   display: flex;
   flex: 1;
   align-items: center;
-  gap: 10px;
-  min-width: 0;
+  gap: 6px;
+  min-width: calc(2 * var(--control-size) + 6px);
 }
 
 .collapsedToggles .toggleLabel {
@@ -261,11 +265,12 @@
   align-items: center;
   justify-content: center;
   gap: 4px;
-  height: 34px;
-  padding: 0 12px;
-  border-radius: 18px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  background-color: transparent;
+  height: var(--control-size);
+  min-width: var(--control-size);
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background-color: var(--dsw-specific-selector);
   color: var(--dsw-alias-label-primary);
   font: inherit;
   font-size: 13px;
@@ -301,8 +306,13 @@
   display: flex;
   flex-shrink: 0;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   margin-left: auto;
+}
+
+.right button {
+  min-width: var(--control-size);
+  min-height: var(--control-size);
 }
 
 .sendButton {
@@ -310,9 +320,9 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: 34px;
-  height: 34px;
-  margin-left: 6px;
+  width: var(--control-size);
+  height: var(--control-size);
+  margin-left: 2px;
   padding: 0;
   border: none;
   border-radius: 50%;
@@ -328,5 +338,112 @@
   &.disabled {
     opacity: 0.4;
     cursor: not-allowed;
+  }
+}
+
+.personaControl {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 156px;
+}
+
+.personaChip {
+  position: relative;
+  width: fit-content;
+  max-width: 100%;
+  border-radius: 999px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.personaLabel {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  box-sizing: border-box;
+  min-height: var(--control-size);
+  padding: 0 10px;
+  border-radius: inherit;
+  background: var(--dsw-specific-selector);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.personaLabel span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.personaLabel svg {
+  flex: none;
+}
+
+.personaChip select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.personaChip:has(select:focus-visible) {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: 2px;
+}
+
+.personaChip:has(select:disabled) {
+  opacity: 0.5;
+}
+
+.personaChip:active .personaLabel,
+.toggle:active {
+  background: var(--dsw-alias-interactive-bg-active, var(--dsw-alias-interactive-bg-hover));
+}
+
+@container (max-width: 375px) {
+  .functionRow:has(.personaControl) {
+    flex-wrap: wrap;
+  }
+
+  .functionRow {
+    column-gap: 4px;
+    padding-inline: 5px;
+  }
+
+  .right {
+    gap: 0;
+  }
+
+  .sendButton {
+    margin-left: 0;
+  }
+
+  .personaControl {
+    flex-basis: 100%;
+    max-width: none;
+  }
+}
+
+@container (max-width: 330px) {
+  .functionRow {
+    flex-wrap: wrap;
+  }
+
+  .personaControl {
+    flex-basis: auto;
+    max-width: 45%;
+  }
+
+  .right {
+    flex-basis: 100%;
+    justify-content: flex-end;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toggle,
+  .sendButton {
+    transition: none;
   }
 }

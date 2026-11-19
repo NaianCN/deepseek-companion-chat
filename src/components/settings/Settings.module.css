@@ -1,8 +1,8 @@
 .dialog {
   --modal-header-gap: 7px;
   width: 760px;
-  height: 500px;
-  max-height: calc(100vh - 32px);
+  height: 640px;
+  max-height: calc(100dvh - 32px);
   padding: 19px 24px 22px;
 }
 
@@ -60,6 +60,8 @@
 }
 
 .content {
+  --settings-capsule-width: min(140px, 40vw);
+  --settings-capsule-height: 36px;
   display: flex;
   flex: 1 0 0;
   flex-direction: column;
@@ -293,7 +295,7 @@
     align-self: flex-end;
     width: 100%;
     max-width: none;
-    height: calc(100% - 64px);
+    height: calc(100% - 40px);
     max-height: 800px;
     border-radius: 24px 24px 0 0;
   }
@@ -439,4 +441,39 @@
     overflow-wrap: anywhere;
     max-width: 100%;
   }
+}
+
+.groupedRow {
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.groupedRow .text {
+  flex-basis: 160px;
+  padding-right: 0;
+}
+
+.cellActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.settingTag {
+  display: inline-block;
+  margin-inline-start: 4px;
+  padding-inline: 6px;
+  border-radius: 999px;
+  color: var(--dsw-alias-label-secondary);
+  background: var(--dsw-alias-interactive-bg-hover);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.voiceSelect {
+  width: var(--settings-capsule-width);
+  height: var(--settings-capsule-height);
+  border-radius: 999px;
 }

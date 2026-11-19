@@ -1,3 +1,6 @@
+import { ContextEditorHost } from '../features/context/ContextEditor.js'
+import { refreshContextData } from '../features/context/repository.js'
+import { refreshPersonas } from '../features/persona/store.js'
 import { useEffect } from 'react'
 import { useTranslate } from '../i18n/index.js'
 import { useSettings } from '../services/settings.js'
@@ -54,7 +57,8 @@ export const App = () => {
 
   useEffect(() => {
     document.documentElement.lang = locale
-  }, [locale])
+    document.title = t('appName')
+  }, [locale, t])
 
   // 文件数、存储空间达到上限时，附件上只显示「上传失败」，原因用 toast 说明
   useEffect(() => onUploadNotice(showToast), [])
@@ -69,6 +73,8 @@ export const App = () => {
 
   useEffect(() => {
     void initChat()
+    void refreshContextData().catch(() => showToast({ key: 'contextEditorFailed', type: 'error' }))
+    void refreshPersonas().catch(() => showToast({ key: 'personaStorageError', type: 'error' }))
     // 首次打开先在设置里输入 API Key
     ensureApiKey()
   }, [])
@@ -133,6 +139,7 @@ export const App = () => {
         <SearchPanel />
       </div>
       <SettingsDialog />
+      <ContextEditorHost session={session} />
       <Toast />
     </>
   )

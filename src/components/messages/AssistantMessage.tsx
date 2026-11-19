@@ -1,3 +1,4 @@
+import { ReplyTokens } from '../../features/context/TokenViews.js'
 import { useTranslate } from '../../i18n/index.js'
 import clsx from 'clsx'
 import { memo } from 'react'
@@ -124,6 +125,7 @@ export const AssistantMessage = memo(function AssistantMessage({
           </span>
         </div>
       ) : null}
+      {!streaming && <ReplyTokens sessionId={sessionId} reply={message} />}
       {!streaming && !refused && view.searchResults.length > 0 ? (
         <div
           className={clsx(styles.summary, panelEntry === summaryEntry && styles.summaryActive)}

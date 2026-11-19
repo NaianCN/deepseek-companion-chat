@@ -1,3 +1,5 @@
+import { recordSpeech } from '../../features/context/repository.js'
+import { createId } from '../../utils/id.js'
 import { create } from 'zustand'
 import type { TranslationMessage } from '../../i18n/index.js'
 import { ApiError } from '../api/client.js'
@@ -99,7 +101,10 @@ export const toggleReadAloud = (
     let lastSource: AudioBufferSourceNode | null = null
     let rest = new Uint8Array(0)
     try {
+      const started = Date.now()
+      const requestId = createId()
       const stream = await synthesize(apiKey ?? '', text, ttsVoice, controller.signal)
+      void recordSpeech(requestId, started, text).catch(() => {})
       const reader = stream.getReader()
       controller.signal.addEventListener('abort', () => void reader.cancel().catch(() => {}))
       for (;;) {

@@ -38,7 +38,9 @@ export const VoiceButton = ({
   return (
     <>
       {recording ? <span className={styles.timer}>{t('voiceInputTimer', { seconds })}</span> : null}
-      <Tooltip content={label}>
+      <Tooltip
+        content={status === 'idle' && !disabled ? `${label} · ${t('contextExtraCost')}` : label}
+      >
         <button
           type="button"
           className={clsx(

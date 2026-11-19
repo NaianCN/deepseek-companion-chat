@@ -1,4 +1,4 @@
-/** ZIP 条目名。条目顺序固定：manifest → user（可能缺失）→ 全部会话 JSON → index → 全部图片。 */
+/** ZIP 条目名。应用导出时的顺序为manifest → user（可能缺失）→ 全部会话 JSON → index → 全部图片。 */
 
 export const MANIFEST_PATH = 'manifest.json'
 export const USER_PATH = 'user.json'

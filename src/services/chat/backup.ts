@@ -1,6 +1,7 @@
 import { formatDate } from '../../utils/format.js'
 import * as db from './db.js'
-import { replaceHistory, useChatStore } from './store.js'
+import { mergeHistory, replaceHistory, useChatStore } from './store.js'
+import type { HistorySource } from './history/importArchive.js'
 import type { Session } from './types.js'
 
 export { BackupError } from './history/errors.js'
@@ -8,8 +9,11 @@ export { BackupError } from './history/errors.js'
 // 导入、导出与全部删除串行处理，避免读取归档时数据被清空或两个替换事务交错。
 let backupQueue: Promise<unknown> = Promise.resolve()
 
-const enqueueBackup = <T>(run: () => Promise<T>): Promise<T> => {
-  const task = backupQueue.then(run)
+export const enqueueBackup = <T>(run: () => Promise<T>): Promise<T> => {
+  const task = backupQueue.then(() => {
+    const locks = globalThis.navigator?.locks
+    return locks ? locks.request('chat-demo:history', () => run()) : run()
+  })
   backupQueue = task.catch(() => {})
   return task
 }
@@ -39,19 +43,34 @@ export const exportHistory = (): Promise<{ name: string; blob: Blob }> =>
     return { name: backupFileName(now), blob }
   })
 
-/**
- * 确认覆盖后调用：先检查 ZIP 格式与版本，校验失败时保留正在生成的回答；
- * 通过后从 ZIP 流式写入暂存，成功才替换原有会话与图片原件。返回导入的会话数。
- */
-export const importHistory = (file: File): Promise<number> =>
+export type ImportCount = Awaited<ReturnType<typeof db.previewStagingMerge>>
+type ImportChoice = { personaId: string | null }
+
+/** 校验全部归档后预览，确认时再次在事务内检查重复会话。 */
+export const importHistory = (
+  source: HistorySource,
+  confirm: (preview: ImportCount) => Promise<ImportChoice | null>
+): Promise<ImportCount | null> =>
   enqueueBackup(async () => {
-    const { checkArchiveFormat, importArchive } = await import('./history/importArchive.js')
-    await checkArchiveFormat(file)
-    return replaceHistory(() => importArchive(file))
+    const { importArchive } = await import('./history/importArchive.js')
+    await db.clearStaging()
+    try {
+      await importArchive(source)
+      const ids = useChatStore.getState().sessions.map((session) => session.id)
+      const choice = await confirm(await db.previewStagingMerge(ids))
+      if (choice) {
+        return await mergeHistory(choice.personaId)
+      }
+      await db.clearStaging()
+      return null
+    } catch (error) {
+      await db.clearStaging().catch(db.reportStorageError('clear unfinished history import'))
+      throw error
+    }
   })
 
 /** 确认删除后调用：以空历史原子替换全部本地会话与附件，保留 API Key 和其他设置。 */
 export const clearHistory = (): Promise<void> =>
   enqueueBackup(async () => {
-    await replaceHistory(async () => {})
+    await replaceHistory(db.deleteAllHistory)
   })

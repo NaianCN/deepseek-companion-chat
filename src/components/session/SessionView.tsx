@@ -1,3 +1,5 @@
+import { usePersonas } from '../../features/persona/store.js'
+import { Spark } from '../../features/streak/Spark.js'
 import clsx from 'clsx'
 import { useIsMobile } from '../../app/viewport.js'
 import { useTranslate } from '../../i18n/index.js'
@@ -20,6 +22,10 @@ export const SessionView = ({
   const t = useTranslate()
   const isMobile = useIsMobile()
   const title = session.title || t('untitledChat')
+  const persona = usePersonas(({ personas, links }) => {
+    const link = links.find((item) => item.sessionId === session.id)
+    return personas.find((item) => item.id === link?.personaId)
+  })
   return (
     <div className={styles.view}>
       {isMobile ? (
@@ -29,6 +35,11 @@ export const SessionView = ({
           <div className={clsx(styles.title, siderCollapsed && styles.withCollapsedSider)}>
             {title}
           </div>
+        </div>
+      )}
+      {persona && (
+        <div className={styles.spark}>
+          <Spark persona={persona} showCalendar />
         </div>
       )}
       <MessageList

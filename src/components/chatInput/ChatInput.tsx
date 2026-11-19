@@ -1,6 +1,8 @@
+import { ContextRing } from '../../features/context/TokenViews.js'
 import clsx from 'clsx'
-import { memo, useCallback, useEffect, useLayoutEffect, useRef } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
+  IconChevronDownOutline14,
   IconGlobeLanguageOutline14,
   IconPaperclipOutline16,
   IconSendOutline16,
@@ -32,6 +34,8 @@ import { useVoiceInput } from './useVoiceInput.js'
 import { VoiceButton } from './VoiceButton.js'
 import { Spectrum } from './Spectrum.js'
 import { useTranslate } from '../../i18n/index.js'
+import { bindPersona } from '../../features/persona/repository.js'
+import { refreshPersonas, usePersonas } from '../../features/persona/store.js'
 import styles from './ChatInput.module.css'
 
 /** 输入框：自适应高度的文本框 + 文件 + 深度思考与智能搜索开关 + 语音输入 + 发送 / 停止 */
@@ -50,12 +54,52 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
     (state) => sessionId !== null && Object.hasOwn(state.streaming, sessionId)
   )
   const thinking = useSettings((state) => state.thinking)
+  const session = useChatStore((state) =>
+    sessionId === null ? undefined : state.sessionCache[sessionId]
+  )
   const importingHistory = useChatStore((state) => state.importingHistory)
   const isMobile = useIsMobile()
   const search = useSettings((state) => state.search)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const togglesRef = useRef<HTMLDivElement>(null)
+  const [newPersonaId, setNewPersonaId] = useState('')
+  const [personaBusy, setPersonaBusy] = useState(false)
+  const personaBusyRef = useRef(false)
+  const personas = usePersonas((state) => state.personas)
+  const linkedId = usePersonas(
+    (state) => state.links.find((link) => link.sessionId === sessionId)?.personaId
+  )
+  const persona = personas.find(
+    (item) => item.id === (sessionId === null ? newPersonaId : linkedId)
+  )
+
+  const runPersonaAction = async (run: () => Promise<void>) => {
+    if (personaBusyRef.current) {
+      return
+    }
+    personaBusyRef.current = true
+    setPersonaBusy(true)
+    try {
+      await run()
+    } catch {
+      showToast({ key: 'personaStorageError', type: 'error' })
+    } finally {
+      personaBusyRef.current = false
+      setPersonaBusy(false)
+    }
+  }
+
+  const switchPersona = (id: string) => {
+    if (sessionId === null) {
+      setNewPersonaId(id)
+      return
+    }
+    void runPersonaAction(async () => {
+      await bindPersona(sessionId, id || null)
+      await refreshPersonas()
+    })
+  }
 
   useLayoutEffect(() => {
     const toggles = togglesRef.current
@@ -130,7 +174,8 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
   const recording = voice.status === 'recording'
 
   // 排队、上传中或上传失败的附件都留在输入框，全部上传成功后才能发送
-  const canSend = !importingHistory && !streaming && voice.status === 'idle' && draftReady
+  const canSend =
+    !personaBusy && !importingHistory && !streaming && voice.status === 'idle' && draftReady
 
   const send = () => {
     if (
@@ -140,16 +185,20 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
     ) {
       return
     }
-    // 文本与上传完成态由提交动作读取最新快照，不使用上一次渲染的草稿。
-    if (!ensureApiKey() || !sendMessage(sessionId)) {
+    if (personaBusyRef.current || !ensureApiKey()) {
       return
     }
-    stopReadAloud()
-    if (isMobile) {
-      textareaRef.current?.blur()
-    } else {
-      textareaRef.current?.focus()
-    }
+    void runPersonaAction(async () => {
+      if (!(await sendMessage(sessionId, sessionId === null ? (persona?.id ?? null) : null))) {
+        return
+      }
+      stopReadAloud()
+      if (isMobile) {
+        textareaRef.current?.blur()
+      } else {
+        textareaRef.current?.focus()
+      }
+    })
   }
 
   return (
@@ -171,6 +220,7 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
           // 移动端不自动聚焦，避免一打开就弹出键盘
           autoFocus={!isMobile}
           disabled={importingHistory}
+          readOnly={personaBusy}
           value={text}
           onChange={(event) => setText(event.target.value)}
           onMouseDown={(event) => {
@@ -200,6 +250,29 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
         </div>
       </div>
       <div className={styles.functionRow}>
+        {personas.length > 0 && (
+          <div className={styles.personaControl}>
+            <div className={styles.personaChip}>
+              <span className={styles.personaLabel} aria-hidden="true" title={persona?.name}>
+                <span>{persona?.name ?? t('personaUnbound')}</span>
+                <IconChevronDownOutline14 />
+              </span>
+              <select
+                aria-label={t('personaBinding')}
+                value={persona?.id ?? ''}
+                disabled={personaBusy || importingHistory || streaming}
+                onChange={(event) => switchPersona(event.target.value)}
+              >
+                <option value="">{t('personaUnbound')}</option>
+                {personas.map(({ id, name }) => (
+                  <option value={id} key={id}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
         {/* 深度思考 / 智能搜索开关，tooltip 在按钮上方 */}
         <div ref={togglesRef} className={styles.toggles}>
           <Tooltip content={t('deactivatedThinkTooltip')}>
@@ -228,9 +301,10 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
           </Tooltip>
         </div>
         <div className={styles.right}>
+          <ContextRing session={session} draftPersona={sessionId === null ? persona : undefined} />
           <VoiceButton
             status={voice.status}
-            disabled={!voice.available}
+            disabled={!voice.available || personaBusy}
             seconds={voice.seconds}
             onClick={() => {
               if (
@@ -246,7 +320,7 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
             tone="primary"
             icon={<IconPaperclipOutline16 />}
             tooltip={t('uploadFile')}
-            disabled={importingHistory}
+            disabled={importingHistory || personaBusy}
             onClick={() => ensureApiKey() && fileInputRef.current?.click()}
           />
           <input

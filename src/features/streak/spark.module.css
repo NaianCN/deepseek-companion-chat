@@ -1,0 +1,199 @@
+.spark {
+  margin-top: 8px;
+  font-size: 13px;
+}
+.summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.mark {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.mark[data-level='1'] {
+  color: #ca5b19;
+}
+.mark[data-level='2'] {
+  color: #bd4026;
+}
+.mark[data-level='3'] {
+  color: #b13e65;
+}
+.mark[data-level='4'] {
+  --spark-peak: 1.14;
+  color: #8753b8;
+}
+.mark[data-level='5'] {
+  --spark-peak: 1.18;
+  color: #376bd0;
+}
+.mark[data-pending='true'] {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* Brief feedback when today's spark lights or reaches a new level. */
+@media (prefers-reduced-motion: no-preference) {
+  .mark[data-pending='false']:not([data-level='0']) path {
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+
+  .mark[data-pending='false']:not([data-level='0']) > path {
+    animation: spark-pulse 580ms ease-out;
+  }
+
+  .mark[data-pending='false'] > g > path {
+    animation: spark-twinkle 440ms ease-out both;
+  }
+}
+
+@keyframes spark-pulse {
+  45% {
+    transform: scale(var(--spark-peak, 1.1));
+  }
+}
+
+@keyframes spark-twinkle {
+  from {
+    opacity: 0.65;
+    transform: scale(0.78);
+  }
+
+  55% {
+    opacity: 1;
+    transform: scale(1.18) rotate(14deg);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.details {
+  max-width: 440px;
+}
+
+.details > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  box-sizing: border-box;
+  width: fit-content;
+  max-width: 100%;
+  padding: 4px 8px;
+  border-radius: 10px;
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+  list-style: none;
+}
+
+.details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.calendarLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
+}
+
+.calendarChevron {
+  display: flex;
+}
+
+.details[open] .calendarChevron {
+  transform: rotate(90deg);
+}
+
+.level {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--dsw-specific-selector);
+}
+
+.progress {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 8px 0;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.details small {
+  display: block;
+  margin-top: 6px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.month {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 0;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 3px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.grid time {
+  display: block;
+  padding: 4px 0;
+  border-radius: 6px;
+}
+.grid time[aria-current='date'] {
+  outline: 1px solid currentColor;
+  outline-offset: -1px;
+}
+.activeDate {
+  background: #e88b353b;
+  font-weight: 700;
+}
+
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.details summary:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.details summary:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+}
+
+.details .grid > span {
+  color: var(--dsw-alias-label-secondary);
+}
+
+.compactSpark {
+  display: inline-flex;
+  align-items: center;
+  justify-self: end;
+  flex: none;
+  font-size: 11px;
+}
+.compactSpark .summary {
+  gap: 3px;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+.compactSpark svg {
+  width: 15px;
+  height: 15px;
+}

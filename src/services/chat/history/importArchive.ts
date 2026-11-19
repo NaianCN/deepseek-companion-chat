@@ -1,7 +1,8 @@
+import { createId } from '../../../utils/id.js'
 import * as db from '../db.js'
 import { BackupError, fail } from './errors.js'
 import type { SessionIndexEntry } from './format.js'
-import { INDEX_PATH, MANIFEST_PATH, USER_PATH, parseSessionPath, sessionFilesDir } from './paths.js'
+import { INDEX_PATH, MANIFEST_PATH, USER_PATH, parseSessionPath } from './paths.js'
 import { checkManifest, readSessionFile, readSessionIndex } from './schema.js'
 import { toLocalSession } from './toLocal.js'
 import {
@@ -50,91 +51,145 @@ const readJson = async (entry: ArchiveEntry): Promise<unknown> => {
   }
 }
 
-/**
- * 检查 ZIP 格式、首个 manifest 条目及格式版本。
- * 校验失败时保留正在生成的回答和现有暂存数据。
- */
-export const checkArchiveFormat = async (file: File): Promise<void> => {
-  if (!(await isZipFile(file))) {
-    fail('backupUnrecognized')
+const isSystemEntry = (path: string) =>
+  path.split('/').some((part) => part === '__MACOSX') ||
+  path.split('/').some((part) => part === '.DS_Store' || part.startsWith('._'))
+
+/** 从 manifest 定位唯一导出根目录。选择文件夹和解压后重新打包的 ZIP 使用同一套规则。 */
+const locateArchive = (paths: string[]) => {
+  const manifests = paths.filter(
+    (path) => !isSystemEntry(path) && /^(?:[^/]+\/)?manifest\.json$/.test(path)
+  )
+  if (manifests.length !== 1) {
+    return fail('backupUnrecognized')
   }
-  try {
-    for await (const entry of readArchive(file)) {
-      if (entry.path !== MANIFEST_PATH) {
-        fail('backupUnrecognized')
-      }
-      checkManifest(await readJson(entry))
-      return
-    }
-  } catch (error) {
-    throw error instanceof ArchiveError ? new BackupError('backupIncomplete') : error
-  }
-  fail('backupUnrecognized')
+  return manifests[0].slice(0, -MANIFEST_PATH.length)
 }
 
-/**
- * 流式导入：manifest → user（不导入）→ 全部会话 JSON → index → 全部图片。
- * 也支持会话与图片交错排列、index 位于末尾的条目顺序。
- * 会话读完立即暂存，只保留图片路径映射；图片全部读完后逐会话回填 MIME，不改变图片身份。
- * 写入导入暂存存储；调用方负责先清空暂存，成功后替换正式数据，失败时清理暂存。
- */
-export const importArchive = async (file: File): Promise<void> => {
-  if (!(await isZipFile(file))) {
-    fail('backupUnrecognized')
+const priority = (path: string) => {
+  if (path === MANIFEST_PATH) {
+    return 0
   }
+  if (path === INDEX_PATH) {
+    return 1
+  }
+  if (parseSessionPath(path) !== null) {
+    return 2
+  }
+  return 3
+}
+
+const folderEntries = async function* (
+  files: readonly File[],
+  root: string
+): AsyncGenerator<ArchiveEntry> {
+  const entries = files.map((file) => ({ file, path: file.webkitRelativePath.normalize('NFC') }))
+  const seen = new Set<string>()
+  for (const { path } of entries) {
+    if (
+      path
+        .split('/')
+        .some((part) => !part || part === '.' || part === '..' || part.includes('\\')) ||
+      seen.has(path)
+    ) {
+      fail('backupIncomplete')
+    }
+    seen.add(path)
+  }
+  entries.sort((a, b) => priority(a.path.slice(root.length)) - priority(b.path.slice(root.length)))
+  for (const { file, path } of entries) {
+    yield {
+      path,
+      size: file.size,
+      stream: (async function* () {
+        const reader = file.stream().getReader()
+        try {
+          for (;;) {
+            const chunk = await reader.read()
+            if (chunk.done) {
+              break
+            }
+            yield chunk.value
+          }
+        } finally {
+          reader.releaseLock()
+        }
+      })(),
+    }
+  }
+}
+
+export type HistorySource = File | readonly File[]
+
+/** 按逻辑顺序读取，先校验 manifest、索引和会话，再按引用保存附件原件。 */
+export const importArchive = async (source: HistorySource): Promise<void> => {
+  let root = ''
+  let entries: AsyncGenerator<ArchiveEntry>
+  if (source instanceof File) {
+    if (!(await isZipFile(source))) {
+      fail('backupUnrecognized')
+    }
+    entries = readArchive(source, (paths) => {
+      root = locateArchive(paths)
+      return (path) => (path.startsWith(root) ? priority(path.slice(root.length)) : 3)
+    })
+  } else {
+    root = locateArchive(source.map((file) => file.webkitRelativePath.normalize('NFC')))
+    entries = folderEntries(source, root)
+  }
+
   const imported = new Set<string>()
   const images = new Map<string, string>()
-  /** 已保存的原件：文件 ID → MIME。同一图片出现在多个会话目录时只保存一次。 */
   const stored = new Map<string, string>()
   let manifest = false
   let index: SessionIndexEntry[] | undefined
-  let currentSessionId: string | undefined
-
-  const saveImage = async (entry: ArchiveEntry, id: string) => {
-    if (stored.has(id)) {
-      await skipEntry(entry)
-      return
-    }
-    const data = await readEntry(entry)
-    const type = imageType(new Uint8Array(await data.slice(0, 16).arrayBuffer()))
-    await db.saveStagingFiles([{ id, blob: new Blob([data], { type }) }])
-    stored.set(id, type)
-  }
 
   try {
-    for await (const entry of readArchive(file)) {
-      const { path } = entry
+    for await (const entry of entries) {
+      if (isSystemEntry(entry.path)) {
+        await skipEntry(entry)
+        continue
+      }
+      if (!entry.path.startsWith(root)) {
+        fail('backupIncomplete')
+      }
+      const path = entry.path.slice(root.length)
       const sessionId = parseSessionPath(path)
-      if (!manifest) {
-        if (path !== MANIFEST_PATH) {
-          fail('backupUnrecognized')
-        }
+      if (path === MANIFEST_PATH) {
         checkManifest(await readJson(entry))
         manifest = true
-      } else if (path === USER_PATH && !index && imported.size === 0) {
-        // 账号信息（已脱敏）不导入；文件可能缺失。
-        await skipEntry(entry)
-      } else if (sessionId !== null && !index) {
-        const local = toLocalSession(readSessionFile(await readJson(entry)))
+      } else if (path === INDEX_PATH) {
+        index = readSessionIndex(await readJson(entry))
+      } else if (sessionId !== null) {
+        const ids = new Map<string, string>()
+        const local = toLocalSession(readSessionFile(await readJson(entry)), (file) => {
+          const path = file.is_image ? file.export_path?.normalize('NFC') : undefined
+          const key = JSON.stringify(path === undefined ? ['id', file.id] : ['path', path])
+          const id = ids.get(key) ?? createId()
+          ids.set(key, id)
+          return id
+        })
         if (local.session.id !== sessionId || imported.has(sessionId)) {
           fail('backupIncomplete')
         }
         imported.add(sessionId)
-        currentSessionId = sessionId
         for (const [imagePath, id] of local.images) {
           images.set(imagePath, id)
         }
         await db.addStagingSession(local.session)
-      } else if (path === INDEX_PATH && !index) {
-        index = readSessionIndex(await readJson(entry))
       } else if (
-        index
-          ? imported.has(/^chat_sessions\/([^/]+)_files\//.exec(path)?.[1] ?? '')
-          : currentSessionId && path.startsWith(sessionFilesDir(currentSessionId))
+        path === USER_PATH ||
+        imported.has(/^chat_sessions\/([^/]+)_files\//.exec(path)?.[1] ?? '')
       ) {
-        // 没有被引用的条目不保存，引用了但缺失的图片只展示文件名。
         const id = images.get(path)
-        await (id === undefined ? skipEntry(entry) : saveImage(entry, id))
+        if (id === undefined) {
+          await skipEntry(entry)
+          continue
+        }
+        const data = await readEntry(entry)
+        const type = imageType(new Uint8Array(await data.slice(0, 16).arrayBuffer()))
+        await db.saveStagingFiles([{ id, blob: new Blob([data], { type }) }])
+        stored.set(id, type)
       } else {
         fail('backupIncomplete')
       }
@@ -145,7 +200,6 @@ export const importArchive = async (file: File): Promise<void> => {
   if (!manifest) {
     fail('backupUnrecognized')
   }
-  // index 只列出成功写出的会话，与会话文件一一对应。
   const listed = new Set(index?.map((entry) => entry.id))
   if (
     !index ||

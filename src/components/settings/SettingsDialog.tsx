@@ -1,3 +1,9 @@
+import { BudgetSettings } from '../../features/context/BudgetSettings.js'
+import { closeMobileSider } from '../sider/mobileSiderState.js'
+import type { HistorySource } from '../../services/chat/history/importArchive.js'
+import type { CompanionData } from '../../features/backup/repository.js'
+import { PersonaManager, PersonaSelect } from '../../features/persona/PersonaManager.js'
+import type { ImportCount } from '../../services/chat/backup.js'
 import clsx from 'clsx'
 import { useRef, useState, type ReactNode } from 'react'
 import {
@@ -7,7 +13,6 @@ import {
   IconFollowsystemOutline16,
   IconLightOutline16,
   IconSettingsOutline16,
-  IconUploadOutline14,
 } from '../base/icons.js'
 import {
   BackupError,
@@ -59,12 +64,14 @@ const SettingsContent = () => {
   const isMobile = useIsMobile()
   // 打开时按调用方指定的分组选中，之后在弹窗内切换
   const [section, setSection] = useState(() => useSettingsDialog.getState().section)
+  const [managingPersonas, setManagingPersonas] = useState(false)
   // 切换分组不丢失正在输入的 API Key 与导入状态
   const apiKeyEditor = useApiKeyEditor()
   const historyImport = useHistoryImport()
   const historyDelete = useHistoryDelete()
+  const companion = useCompanionBackup()
   const replacingHistory = useChatStore((state) => state.importingHistory)
-  const historyBusy = historyImport.busy || historyDelete.busy || replacingHistory
+  const historyBusy = historyImport.busy || historyDelete.busy || replacingHistory || companion.busy
   return (
     <>
       <Modal
@@ -73,7 +80,7 @@ const SettingsContent = () => {
         className={styles.dialog}
         mainClassName={styles.dialogMain}
         onClose={() => {
-          if (!historyDelete.busy) {
+          if (!historyBusy && !companion.preview && !managingPersonas) {
             closeSettings()
           }
         }}
@@ -96,16 +103,33 @@ const SettingsContent = () => {
         <div role="tabpanel" className={styles.content}>
           {section === 'general' ? (
             <>
+              <SettingCell
+                label={t('personaManage')}
+                description={t('personaMemoriesSettings')}
+                status={null}
+                action={
+                  <Button
+                    size="m"
+                    variant="outlined"
+                    className={styles.cellButton}
+                    onClick={() => setManagingPersonas(true)}
+                  >
+                    {t('personaManageAction')}
+                  </Button>
+                }
+              />
               <ThemeSetting />
               <LocaleSetting />
               <TtsVoiceSetting />
               <LocationSetting />
+              <BudgetSettings />
             </>
           ) : (
             <>
               <ApiKeyField editor={apiKeyEditor} />
               <ImportHistory historyImport={historyImport} disabled={historyBusy} />
               <ExportHistory disabled={historyBusy} />
+              <CompanionBackupSettings backup={companion} disabled={historyBusy} />
               <SettingCell
                 label={t('deleteAllSessions')}
                 status={null}
@@ -126,7 +150,19 @@ const SettingsContent = () => {
           )}
         </div>
       </Modal>
-      {historyImport.file ? <ImportConfirm historyImport={historyImport} /> : null}
+      {managingPersonas && (
+        <PersonaManager
+          onClose={() => setManagingPersonas(false)}
+          onStartChat={() => {
+            closeSettings()
+            closeMobileSider()
+          }}
+        />
+      )}
+      {historyImport.preview ? (
+        <ImportConfirm historyImport={historyImport} preview={historyImport.preview} />
+      ) : null}
+      {companion.preview && <CompanionRestoreConfirm backup={companion} data={companion.preview} />}
       {historyDelete.opened ? <DeleteAllConfirm historyDelete={historyDelete} /> : null}
     </>
   )
@@ -216,7 +252,11 @@ const LocationSetting = () => {
 
   return (
     <SettingCell
-      label={t('settingsLocation')}
+      label={
+        <>
+          {t('settingsLocation')} <span className={styles.settingTag}>{t('contextOptional')}</span>
+        </>
+      }
       status={null}
       className={styles.locationCell}
       action={
@@ -297,11 +337,16 @@ const TtsVoiceSetting = () => {
   const ttsVoice = useSettings((state) => state.ttsVoice)
   return (
     <SettingCell
-      label={t('settingsTtsVoice')}
+      label={
+        <>
+          {t('settingsTtsVoice')} <span className={styles.settingTag}>{t('contextExtraCost')}</span>
+        </>
+      }
       status={null}
       action={
         <Select
           ariaLabel={t('settingsTtsVoice')}
+          className={styles.voiceSelect}
           value={ttsVoice}
           options={[
             { value: 'stella', label: t('settingsTtsVoiceStella') },
@@ -314,13 +359,15 @@ const TtsVoiceSetting = () => {
   )
 }
 
-/** 覆盖导入的二次确认，叠在设置弹窗上 */
 const ImportConfirm = ({
   historyImport,
+  preview,
 }: {
   historyImport: ReturnType<typeof useHistoryImport>
+  preview: ImportCount
 }) => {
   const t = useTranslate()
+  const [personaId, setPersonaId] = useState('')
   return (
     <Modal
       title={t('historyImportConfirmTitle')}
@@ -331,13 +378,16 @@ const ImportConfirm = ({
           <Button variant="outlined" size="m" autoFocus onClick={historyImport.cancel}>
             {t('cancel')}
           </Button>
-          <Button variant="dangerOutlined" size="m" onClick={() => void historyImport.confirm()}>
+          <Button size="m" onClick={() => historyImport.confirm(personaId)}>
             {t('historyImportConfirm')}
           </Button>
         </>
       }
     >
-      <div className={styles.importConfirmText}>{t('historyImportConfirmDescription')}</div>
+      <div className={styles.importConfirmText}>
+        {t('historyImportConfirmDescription', preview)}
+      </div>
+      {preview.added > 0 && <PersonaSelect value={personaId} onChange={setPersonaId} />}
     </Modal>
   )
 }
@@ -412,7 +462,7 @@ const SettingCell = ({
   action,
   className,
 }: {
-  label: string
+  label: ReactNode
   description?: string
   status: Status
   action: ReactNode
@@ -436,36 +486,54 @@ const SettingCell = ({
   )
 }
 
-/** 选文件后先提示覆盖；确认后才检查文件并执行导入，任何错误都提示导入失败。 */
 const useHistoryImport = () => {
-  const [file, setFile] = useState<File | null>(null)
+  const t = useTranslate()
+  const [preview, setPreview] = useState<ImportCount | null>(null)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<Status>(null)
-  const importing = useRef(false)
-
-  const confirm = async () => {
-    if (!file || importing.current) {
-      return
-    }
-    importing.current = true
-    setFile(null)
+  const decision = useRef<((value: { personaId: string | null } | null) => void) | null>(null)
+  const finish = (value: { personaId: string | null } | null) => {
+    decision.current?.(value)
+    decision.current = null
+    setPreview(null)
+  }
+  const select = async (source: HistorySource) => {
     setBusy(true)
     setStatus(null)
     try {
-      const count = await importHistory(file)
-      setStatus({ key: count === 1 ? 'historyImportedOne' : 'historyImported', params: { count } })
-    } catch {
-      setStatus({ key: 'historyImportFailed', error: true })
+      const result = await importHistory(
+        source,
+        (count) =>
+          new Promise((resolve) => {
+            decision.current = resolve
+            setPreview(count)
+          })
+      )
+      if (result) {
+        setStatus({ key: 'historyImportedSummary', params: result })
+      }
+    } catch (error) {
+      setStatus({
+        key: 'historyImportFailed',
+        ...(error instanceof BackupError
+          ? { reason: error.key }
+          : { params: { message: t('historyImportReadError') } }),
+        error: true,
+      })
     } finally {
-      importing.current = false
       setBusy(false)
     }
   }
-
-  return { file, busy, status, select: setFile, cancel: () => setFile(null), confirm }
+  return {
+    preview,
+    busy,
+    status,
+    select,
+    cancel: () => finish(null),
+    confirm: (personaId: string) => finish({ personaId: personaId || null }),
+  }
 }
 
-/** 导入 = 覆盖：用选中文件替换本地全部会话与附件。 */
 const ImportHistory = ({
   historyImport,
   disabled,
@@ -474,27 +542,49 @@ const ImportHistory = ({
   disabled: boolean
 }) => {
   const t = useTranslate()
-  const inputRef = useRef<HTMLInputElement>(null)
-
+  const zipRef = useRef<HTMLInputElement>(null)
+  const folderRef = useRef<HTMLInputElement>(null)
   return (
     <SettingCell
       label={t('historyImport')}
       description={t('historyImportDescription')}
       status={historyImport.status}
+      className={styles.groupedRow}
       action={
-        <>
+        <div className={styles.cellActions}>
           <Button
             variant="outlined"
             size="m"
-            className={clsx(styles.cellButton, styles.uploadButton)}
+            className={styles.cellButton}
             disabled={disabled}
-            onClick={() => inputRef.current?.click()}
+            onClick={() => folderRef.current?.click()}
           >
-            <IconUploadOutline14 />
-            {t('upload')}
+            {t('historyChooseFolder')}
+          </Button>
+          <Button
+            variant="outlined"
+            size="m"
+            className={styles.cellButton}
+            disabled={disabled}
+            onClick={() => zipRef.current?.click()}
+          >
+            {t('historyChooseZip')}
           </Button>
           <input
-            ref={inputRef}
+            ref={folderRef}
+            type="file"
+            {...{ webkitdirectory: '' }}
+            hidden
+            onChange={(event) => {
+              const files = Array.from(event.target.files ?? [])
+              event.target.value = ''
+              if (files.length) {
+                void historyImport.select(files)
+              }
+            }}
+          />
+          <input
+            ref={zipRef}
             type="file"
             accept=".zip,application/zip,application/x-zip-compressed"
             hidden
@@ -502,13 +592,155 @@ const ImportHistory = ({
               const file = event.target.files?.[0]
               event.target.value = ''
               if (file) {
-                historyImport.select(file)
+                void historyImport.select(file)
               }
             }}
           />
-        </>
+        </div>
       }
     />
+  )
+}
+
+const downloadBackup = ({ name, blob }: { name: string; blob: Blob }) => {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = name
+  link.click()
+  setTimeout(() => URL.revokeObjectURL(url), 10_000)
+}
+
+const useCompanionBackup = () => {
+  const [preview, setPreview] = useState<CompanionData | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [status, setStatus] = useState<Status>(null)
+  const run = async (operation: () => Promise<void>) => {
+    setBusy(true)
+    setStatus(null)
+    try {
+      await operation()
+    } catch {
+      setStatus({ key: 'companionBackupFailed', error: true })
+    } finally {
+      setBusy(false)
+    }
+  }
+  return {
+    preview,
+    busy,
+    status,
+    export: () =>
+      run(async () => {
+        const { exportCompanionBackup } = await import('../../features/backup/companion.js')
+        downloadBackup(await exportCompanionBackup())
+      }),
+    select: (file: File) =>
+      run(async () => {
+        const { readCompanionBackup } = await import('../../features/backup/companion.js')
+        setPreview(await readCompanionBackup(file))
+      }),
+    cancel: () => setPreview(null),
+    restore: () =>
+      run(async () => {
+        if (!preview) {
+          return
+        }
+        setPreview(null)
+        const { restoreCompanionBackup } = await import('../../features/backup/companion.js')
+        await restoreCompanionBackup(preview)
+        setStatus({ key: 'companionBackupRestored' })
+      }),
+  }
+}
+
+const CompanionBackupSettings = ({
+  backup,
+  disabled,
+}: {
+  backup: ReturnType<typeof useCompanionBackup>
+  disabled: boolean
+}) => {
+  const t = useTranslate()
+  const input = useRef<HTMLInputElement>(null)
+  return (
+    <SettingCell
+      label={t('companionBackup')}
+      description={t('companionBackupDescription')}
+      status={backup.status}
+      className={styles.groupedRow}
+      action={
+        <div className={styles.cellActions}>
+          <Button
+            size="m"
+            className={styles.cellButton}
+            variant="outlined"
+            disabled={disabled}
+            onClick={() => void backup.export()}
+          >
+            {t('companionBackupDownload')}
+          </Button>
+          <Button
+            size="m"
+            className={styles.cellButton}
+            variant="outlined"
+            disabled={disabled}
+            onClick={() => input.current?.click()}
+          >
+            {t('companionBackupRestore')}
+          </Button>
+          <input
+            ref={input}
+            type="file"
+            accept=".zip,application/zip"
+            hidden
+            onChange={(event) => {
+              const file = event.target.files?.[0]
+              event.target.value = ''
+              if (file) {
+                void backup.select(file)
+              }
+            }}
+          />
+        </div>
+      }
+    />
+  )
+}
+
+const CompanionRestoreConfirm = ({
+  backup,
+  data,
+}: {
+  backup: ReturnType<typeof useCompanionBackup>
+  data: CompanionData
+}) => {
+  const t = useTranslate()
+  return (
+    <Modal
+      title={t('companionBackupRestore')}
+      className={styles.importConfirm}
+      onClose={backup.cancel}
+      footer={
+        <>
+          <Button size="m" variant="outlined" autoFocus onClick={backup.cancel}>
+            {t('cancel')}
+          </Button>
+          <Button size="m" variant="danger" onClick={() => void backup.restore()}>
+            {t('confirm')}
+          </Button>
+        </>
+      }
+    >
+      {t('companionBackupRestoreDescription', {
+        sessions: data.sessions.length,
+        personas: data.personas.length,
+        files: data.files.length,
+        interactions: data.interactions.length,
+        contexts: data.contexts.length,
+        usage: data.usage.length,
+      })}
+    </Modal>
   )
 }
 
@@ -523,13 +755,7 @@ const ExportHistory = ({ disabled }: { disabled: boolean }) => {
     setBusy(true)
     setStatus(null)
     try {
-      const { name, blob } = await exportHistory()
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = name
-      link.click()
-      setTimeout(() => URL.revokeObjectURL(url), 10_000)
+      downloadBackup(await exportHistory())
     } catch (error) {
       setStatus(errorStatus('historyExportFailed', error))
     } finally {

@@ -1,13 +1,27 @@
+import { CostControl } from '../../features/context/CostControl.js'
+import { Spark } from '../../features/streak/Spark.js'
 import clsx from 'clsx'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
-import { IconPanelLeftOutline16, IconSettingsOutline16, NewChatIcon } from '../base/icons.js'
+import {
+  IconChevronDownOutline14,
+  IconPanelLeftOutline16,
+  IconSettingsOutline16,
+  NewChatIcon,
+} from '../base/icons.js'
 import { setSiderCollapsed } from '../../services/settings.js'
 import { groupSessions } from '../../services/chat/sessionGroups.js'
-import { newChat, removeSession, useChatStore } from '../../services/chat/store.js'
+import {
+  newChat,
+  openPersonaSession,
+  removeSession,
+  useChatStore,
+} from '../../services/chat/store.js'
 import type { SessionSummary } from '../../services/chat/types.js'
 import { Button } from '../base/Button.js'
 import { IconButton } from '../base/IconButton.js'
+import { Avatar } from '../../features/persona/Avatar.js'
+import { usePersonas } from '../../features/persona/store.js'
 import { Modal } from '../base/Modal.js'
 import { showToast } from '../base/toastState.js'
 import { openSettings } from '../settings/settingsDialogState.js'
@@ -20,8 +34,35 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
   const t = useTranslate()
   const sessions = useChatStore((state) => state.sessions)
   const activeId = useChatStore((state) => state.activeId)
+  const { personas, links } = usePersonas()
+  const personaId = links.find(({ sessionId }) => sessionId === activeId)?.personaId
+  const profile = personas.find(({ id }) => id === personaId)
+  const switchingBlocked = useChatStore((state) => !state.ready || state.importingHistory)
+  const [switching, setSwitching] = useState(false)
+  const switchRole = async (id?: string, createNew = false) => {
+    setSwitching(true)
+    try {
+      if (id) {
+        await openPersonaSession(id, createNew)
+      } else {
+        newChat()
+      }
+      closeMobileSider()
+    } catch {
+      showToast({ key: 'personaStorageError', type: 'error' })
+    } finally {
+      setSwitching(false)
+    }
+  }
   const [now, setNow] = useState(Date.now)
-  const groups = useMemo(() => groupSessions(sessions, now, t), [sessions, now, t])
+  const groups = useMemo(() => {
+    const roleBySession = new Map(links.map(({ sessionId, personaId }) => [sessionId, personaId]))
+    return groupSessions(
+      sessions.filter(({ id }) => roleBySession.get(id) === personaId),
+      now,
+      t
+    )
+  }, [personaId, links, sessions, now, t])
   const [deleting, setDeleting] = useState<SessionSummary | null>(null)
   const [deletePending, setDeletePending] = useState(false)
 
@@ -52,7 +93,6 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
   return (
     <div className={clsx(styles.sider, mobile && styles.mobile)}>
       <div className={styles.top}>
-        <div className={styles.appName}>{t('appName')}</div>
         <IconButton
           size="m"
           icon={<IconPanelLeftOutline16 />}
@@ -64,18 +104,42 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
       <button
         type="button"
         className={styles.newChat}
-        onClick={() => {
-          newChat()
-          closeMobileSider()
-        }}
+        disabled={switchingBlocked || switching}
+        onClick={() => void switchRole(profile?.id, true)}
       >
         <span className={styles.newChatIcon}>
           <NewChatIcon />
         </span>
         {t('newChat')}
       </button>
+      {personas.length > 0 && (
+        <div className={styles.roleProfile}>
+          <Avatar blob={profile?.avatar} name={profile?.name ?? t('personaUnbound')} />
+          <strong className={styles.roleName} aria-hidden="true">
+            {profile?.name ?? t('personaUnbound')}
+          </strong>
+          {profile && <Spark persona={profile} compact />}
+          <span className={styles.roleChevron} aria-hidden="true">
+            <IconChevronDownOutline14 />
+          </span>
+          <select
+            aria-label={t('personaChoose')}
+            value={profile?.id ?? ''}
+            disabled={switchingBlocked || switching}
+            onChange={(event) => void switchRole(event.currentTarget.value)}
+          >
+            <option value="">{t('personaUnbound')}</option>
+            {personas.map(({ id, name }) => (
+              <option value={id} key={id}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
       <div className={styles.listWrap}>
         <div className={styles.list}>
+          {groups.length === 0 && <p className={styles.emptyFilter}>{t('historyFilterEmpty')}</p>}
           {groups.map((group) => (
             <div key={group.key} className={styles.section}>
               <div className={styles.sectionHeader}>{group.label}</div>
@@ -98,6 +162,7 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
           </span>
           <span className={styles.settingsLabel}>{t('settings')}</span>
         </button>
+        <CostControl />
       </div>
       {deleting ? (
         <Modal
@@ -109,7 +174,12 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
           }}
           footer={
             <>
-              <Button variant="outlined" disabled={deletePending} onClick={() => setDeleting(null)}>
+              <Button
+                autoFocus
+                variant="outlined"
+                disabled={deletePending}
+                onClick={() => setDeleting(null)}
+              >
                 {t('cancel')}
               </Button>
               <Button
@@ -133,6 +203,7 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
             </>
           }
         >
+          <strong className={styles.deleteTitle}>{deleting.title || t('untitledChat')}</strong>
           {t('deleteSessionWithFilesDescription')}
         </Modal>
       ) : null}
